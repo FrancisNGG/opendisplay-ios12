@@ -53,6 +53,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
     dispatch_source_t _timer;
     NSNetService *_netService;          // 仅主线程访问
     BOOL _running;                      // 仅主线程访问
+    BOOL _usbOnlyMain;                  // 仅主线程访问（决定是否广播 Bonjour）
 
     ODConn *_active;
     ODConn *_pending;                   // 新来的连接先发 hello，收到数据才顶替旧连接（§6.4）
@@ -61,6 +62,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
     double _scale;
     NSString *_installID;
     BOOL _nativeQuality;
+    BOOL _usbOnly;                      // 队列上访问
     NSInteger _smoothDelayMs;
 
     // UDP 光标通道（§6.3）
@@ -126,7 +128,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
         [self openCursorListener];
         [self startTimer];
     });
-    [self publishBonjour];
+    if (!_usbOnlyMain) [self publishBonjour];
 }
 
 - (void)stopWithFarewell:(NSString *)type {
@@ -180,6 +182,22 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
 }
 
 #pragma mark Bonjour
+
+- (void)setUsbOnly:(BOOL)usbOnly {
+    NSAssert([NSThread isMainThread], @"setUsbOnly on main");
+    if (usbOnly != _usbOnlyMain) {
+        _usbOnlyMain = usbOnly;
+        if (_running && usbOnly) { [_netService stop]; _netService = nil; }
+        else if (_running && !_netService) [self publishBonjour];
+    }
+    dispatch_async(_queue, ^{
+        self->_usbOnly = usbOnly;
+        if (!usbOnly) return;
+        // 断开已有的 WiFi 会话
+        if (self->_pending && !self->_pending.loopback) [self closeConn:self->_pending notify:NO];
+        if (self->_active && !self->_active.loopback) [self closeConn:self->_active notify:YES];
+    });
+}
 
 - (void)publishBonjour {
     NSString *name = [UIDevice currentDevice].name ?: @"iPad";
@@ -249,7 +267,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
         socklen_t fromLen = sizeof from;
         ssize_t n = recvfrom(_udpFd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fromLen);
         if (n <= 0) return;
-        if (!_active || buf[0] != '{') continue;
+        if (!_active || _usbOnly || buf[0] != '{') continue;
 
         // 新的 UDP 流：重置序号，只认最新的流（§6.3）
         if (fromLen != _udpPeerLen || memcmp(&from, &_udpPeer, fromLen) != 0) {
@@ -274,6 +292,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
         socklen_t len = sizeof ss;
         int fd = accept(_listenFd, (struct sockaddr *)&ss, &len);
         if (fd < 0) return;
+        if (_usbOnly && ![self isLoopback:&ss]) { close(fd); continue; }   // 仅 USB：WiFi 连接直接拒绝
 
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
         int on = 1;
@@ -542,7 +561,7 @@ static double ODNum(id v, double fallback) {
         @"maxEncodeWide": @(maxW),
         @"maxEncodeHigh": @(maxH),
     } mutableCopy];
-    if (_udpFd >= 0) hello[@"cursorPort"] = @(kCursorPort);   // 仅在 UDP 已绑定时提供；USB 下发送端会忽略
+    if (_udpFd >= 0 && !_usbOnly) hello[@"cursorPort"] = @(kCursorPort);   // 仅在 UDP 已绑定时提供；USB 下发送端会忽略
     return hello;
 }
 

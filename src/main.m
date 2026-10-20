@@ -31,6 +31,7 @@
     [self.server setNativeQuality:[defaults boolForKey:@"od.nativeQuality"]];
     _showStats = [defaults boolForKey:@"od.showStats"];
     [self.server setSmoothingDelayMs:[self smoothDelayMs]];
+    [self.server setUsbOnly:[defaults boolForKey:@"od.usbOnly"]];
 
     // 三指轻点打开设置菜单
     UITapGestureRecognizer *menuTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showMenu:)];
@@ -66,9 +67,13 @@
     if (_connected) {
         [text appendString:@"已连接，等待画面…"];
     } else {
-        [text appendString:@"等待 Mac 上的 OpenDisplay 连接\n\n用数据线连接，或连到同一个 WiFi"];
-        NSString *ip = [ODServer wifiAddress];
-        if (ip) [text appendFormat:@"\nWiFi 地址：%@:9000", ip];
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"od.usbOnly"]) {
+            [text appendString:@"等待 Mac 上的 OpenDisplay 连接\n\n仅 USB 模式：请用数据线连接"];
+        } else {
+            [text appendString:@"等待 Mac 上的 OpenDisplay 连接\n\n用数据线连接，或连到同一个 WiFi"];
+            NSString *ip = [ODServer wifiAddress];
+            if (ip) [text appendFormat:@"\nWiFi 地址：%@:9000", ip];
+        }
     }
     if (_notice.length) [text appendFormat:@"\n\n%@", _notice];
     [self.videoView showStatus:text];
@@ -97,6 +102,14 @@
     [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@原生画质 2048×1536（仅 USB）", native ? @"✓ " : @""]
                                              style:UIAlertActionStyleDefault
                                            handler:^(UIAlertAction *a) { setQuality(YES); }]];
+    BOOL usbOnly = [defaults boolForKey:@"od.usbOnly"];
+    [menu addAction:[UIAlertAction actionWithTitle:usbOnly ? @"✓ 仅 USB 连接（已关闭 WiFi）" : @"仅 USB 连接（关闭 WiFi）"
+                                             style:UIAlertActionStyleDefault
+                                           handler:^(UIAlertAction *a) {
+        [defaults setBool:!usbOnly forKey:@"od.usbOnly"];
+        [self.server setUsbOnly:!usbOnly];
+        [self refreshStatus];
+    }]];
     NSInteger smooth = [self smoothDelayMs];
     for (NSNumber *option in @[@0, @60, @100]) {
         NSInteger value = option.integerValue;

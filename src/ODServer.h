@@ -37,6 +37,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// WiFi 抖动缓冲：按 Mac 截屏时间 + 该延迟（毫秒）均匀显示帧；0 关闭。USB 不受影响
 - (void)setSmoothingDelayMs:(NSInteger)delayMs;
 
+/// 仅 USB：不做 Bonjour 广播、拒绝非 USB 连接，Mac 拔线后不会切到 WiFi
+- (void)setUsbOnly:(BOOL)usbOnly;
+
 - (void)sendTouchPhase:(NSString *)phase x:(double)x y:(double)y;
 - (void)sendScrollDx:(double)dx dy:(double)dy;
 
