@@ -1,11 +1,15 @@
 // OpenDisplay iOS 12 接收端：应用入口、视图控制器和生命周期。
 #import <UIKit/UIKit.h>
+#import <notify.h>
 #import "ODServer.h"
 #import "ODVideoView.h"
 
 @interface ODViewController : UIViewController <ODServerDelegate, ODVideoViewInputDelegate>
 @property (nonatomic, strong) ODServer *server;
 @property (nonatomic, strong) ODVideoView *videoView;
+- (void)appDidBecomeActive;
+- (void)appDidEnterBackground;
+- (void)deviceWillLock;
 @end
 
 @implementation ODViewController {
@@ -14,6 +18,63 @@
     NSString *_notice;
     BOOL _showStats;
     NSString *_lastStats;
+    NSTimer *_autoLockTimer;
+    UIBackgroundTaskIdentifier _backgroundTask;
+}
+
+// 断开后多久恢复系统自动锁屏
+static const NSTimeInterval kAutoLockAfterDisconnect = 60;
+
+#pragma mark Lifecycle
+
+- (void)appDidBecomeActive {
+    [self endBackgroundTask];
+    [self.server start];
+    [self.server resumeListening];
+    [self.server setRenderingPaused:NO];
+    [self updateAutoLock];
+}
+
+/// 和官方一致：锁屏 = 主动关屏，结束会话（Mac 等待唤醒后自动重连）；
+/// 只是切到别的 App 则保持会话，暂停渲染，回来立即继续。
+- (void)appDidEnterBackground {
+    if (![UIApplication sharedApplication].isProtectedDataAvailable) {
+        [self goToSleep];
+        return;
+    }
+    [self.server setRenderingPaused:YES];
+    if (_backgroundTask == UIBackgroundTaskInvalid) {
+        // 后台时间用完后 iOS 会挂起 App；会话不主动结束，由 Mac 的静默宽限处理（同官方）
+        _backgroundTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
+            [self endBackgroundTask];
+        }];
+    }
+}
+
+- (void)deviceWillLock {
+    [self goToSleep];
+}
+
+- (void)goToSleep {
+    [self.server stopWithFarewell:@"sleeping"];   // §6.1：Mac 移除扩展屏，等 iPad 回来后重连
+    [self endBackgroundTask];
+}
+
+- (void)endBackgroundTask {
+    if (_backgroundTask == UIBackgroundTaskInvalid) return;
+    [[UIApplication sharedApplication] endBackgroundTask:_backgroundTask];
+    _backgroundTask = UIBackgroundTaskInvalid;
+}
+
+/// 连接中一直保持亮屏；断开满 1 分钟后交还给系统的自动锁定设置
+- (void)updateAutoLock {
+    [_autoLockTimer invalidate];
+    _autoLockTimer = nil;
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+    if (_connected) return;
+    _autoLockTimer = [NSTimer scheduledTimerWithTimeInterval:kAutoLockAfterDisconnect repeats:NO block:^(NSTimer *t) {
+        [UIApplication sharedApplication].idleTimerDisabled = NO;
+    }];
 }
 
 - (void)loadView {
@@ -24,6 +85,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    _backgroundTask = UIBackgroundTaskInvalid;
     self.server = [[ODServer alloc] init];
     self.server.delegate = self;
     self.server.displayLayer = self.videoView.displayLayer;
@@ -144,6 +206,7 @@
     _notice = nil;
     [self.videoView resetCursor];
     [self refreshStatus];
+    [self updateAutoLock];
 }
 
 - (void)serverDidDisconnect {
@@ -153,6 +216,7 @@
     _hasVideo = NO;
     [self.videoView resetCursor];
     [self refreshStatus];
+    [self updateAutoLock];
 }
 
 - (void)serverVideoSizeChanged:(CGSize)size {
@@ -208,22 +272,26 @@
     self.controller = [[ODViewController alloc] init];
     self.window.rootViewController = self.controller;
     [self.window makeKeyAndVisible];
+
+    // 锁屏检测两路并用：受保护数据通知只在设了密码且「立即」需要密码时才有（官方只用这一路）；
+    // SpringBoard 的 lockcomplete 通知不依赖密码设置。
+    ODViewController *controller = self.controller;
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationProtectedDataWillBecomeUnavailable
+                                                      object:nil queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification *n) { [controller deviceWillLock]; }];
+    int token;
+    notify_register_dispatch("com.apple.springboard.lockcomplete", &token, dispatch_get_main_queue(), ^(int t) {
+        [controller deviceWillLock];
+    });
     return YES;
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    application.idleTimerDisabled = YES;   // 当副屏用时不自动锁屏
-    [self.controller.server start];
+    [self.controller appDidBecomeActive];
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    application.idleTimerDisabled = NO;
-    __block UIBackgroundTaskIdentifier task = [application beginBackgroundTaskWithExpirationHandler:^{
-        [application endBackgroundTask:task];
-        task = UIBackgroundTaskInvalid;
-    }];
-    [self.controller.server stopWithFarewell:@"sleeping"];   // §6.1：设备锁屏/切走，Mac 会等待重连
-    [application endBackgroundTask:task];
+    [self.controller appDidEnterBackground];
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application {

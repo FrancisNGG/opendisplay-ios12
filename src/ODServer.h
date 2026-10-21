@@ -40,6 +40,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 仅 USB：不做 Bonjour 广播、拒绝非 USB 连接，Mac 拔线后不会切到 WiFi
 - (void)setUsbOnly:(BOOL)usbOnly;
 
+/// 切到别的 App 时暂停渲染但保持会话；恢复时请求关键帧
+- (void)setRenderingPaused:(BOOL)paused;
+/// 回到前台时调用：没有活动会话就重建监听（长时间挂起后 iOS 可能已回收监听端口）
+- (void)resumeListening;
+
 - (void)sendTouchPhase:(NSString *)phase x:(double)x y:(double)y;
 - (void)sendScrollDx:(double)dx dy:(double)dy;
 

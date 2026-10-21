@@ -63,6 +63,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
     NSString *_installID;
     BOOL _nativeQuality;
     BOOL _usbOnly;                      // 队列上访问
+    BOOL _renderingPaused;
     NSInteger _smoothDelayMs;
 
     // UDP 光标通道（§6.3）
@@ -183,6 +184,27 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
 
 #pragma mark Bonjour
 
+- (void)setRenderingPaused:(BOOL)paused {
+    dispatch_async(_queue, ^{
+        if (paused == self->_renderingPaused) return;
+        self->_renderingPaused = paused;
+        if (paused) return;
+        // 后台期间丢掉的帧没法补，从下一个关键帧重新开始
+        [self.displayLayer flush];
+        self->_needsKeyframe = YES;
+        if (self->_active) [self requestKeyframe];
+    });
+}
+
+- (void)resumeListening {
+    dispatch_async(_queue, ^{
+        if (self->_active || self->_pending || !self->_listenSource) return;
+        dispatch_source_cancel(self->_listenSource);
+        self->_listenSource = nil;
+        [self openListener];
+    });
+}
+
 - (void)setUsbOnly:(BOOL)usbOnly {
     NSAssert([NSThread isMainThread], @"setUsbOnly on main");
     if (usbOnly != _usbOnlyMain) {
@@ -217,6 +239,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
     if (fd < 0) { [self notice:[NSString stringWithFormat:@"socket 失败：%s", strerror(errno)]]; return; }
     int on = 1, off = 0;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &on, sizeof on);       // 重建监听时旧 fd 可能还没关
     setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof off);   // 同时接 IPv4
     struct sockaddr_in6 addr = {0};
     addr.sin6_len = sizeof addr;
@@ -691,6 +714,7 @@ static double ODNum(id v, double fallback) {
 #pragma mark Video
 
 - (void)handleVideo:(const uint8_t *)p length:(size_t)n {
+    if (_renderingPaused) { _needsKeyframe = YES; return; }   // 后台不能渲染，帧直接丢弃
     // 找出所有 4 字节起始码（§5.1：只会有 4 字节起始码），起始码之前是遥测 JSON，跳过
     enum { kMaxNalus = 128 };
     size_t starts[kMaxNalus], ends[kMaxNalus];
