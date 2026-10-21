@@ -52,7 +52,7 @@ static double ODNowMs(void) { return [[NSDate date] timeIntervalSince1970] * 100
     dispatch_source_t _listenSource;
     dispatch_source_t _timer;
     NSNetService *_netService;          // 仅主线程访问
-    BOOL _running;                      // 仅主线程访问
+    BOOL _running;                      // 仅主线程访问（对外是 isRunning）
     BOOL _usbOnlyMain;                  // 仅主线程访问（决定是否广播 Bonjour）
 
     ODConn *_active;

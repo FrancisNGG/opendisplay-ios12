@@ -25,6 +25,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (atomic, strong, nullable) AVSampleBufferDisplayLayer *displayLayer;
 
 - (void)start;
+/// 是否在运行（start 之后、stopWithFarewell 之前）；仅主线程
+@property (nonatomic, readonly, getter=isRunning) BOOL running;
 /// 进入后台或退出前调用；type 为 "sleeping" 或 "closing"
 - (void)stopWithFarewell:(NSString *)type;
 

@@ -29,8 +29,14 @@ static const NSTimeInterval kAutoLockAfterDisconnect = 60;
 
 - (void)appDidBecomeActive {
     [self endBackgroundTask];
-    [self.server start];
-    [self.server resumeListening];
+    if (self.server.isRunning) {
+        // 切 App 回来：会话一直在，但长时间挂起后 iOS 可能回收了监听端口
+        [self.server resumeListening];
+    } else {
+        // 锁屏回来：会话已结束，重新开始监听即可。不能再调 resumeListening，
+        // 否则会关掉刚打开的监听，把 Mac 第一时间发来的重连掐断
+        [self.server start];
+    }
     [self.server setRenderingPaused:NO];
     [self updateAutoLock];
 }
